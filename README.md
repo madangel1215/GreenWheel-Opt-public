@@ -1,5 +1,7 @@
 # GreenWheel-Opt
 
+[![DOI](https://zenodo.org/badge/1249816989.svg)](https://doi.org/10.5281/zenodo.20396939)
+
 A graph neural network (GNN) surrogate for multi-objective optimization of
 green-energy wheeling allocation. The framework formulates the allocation of
 renewable generation to corporate consumers, under sub-hourly temporal

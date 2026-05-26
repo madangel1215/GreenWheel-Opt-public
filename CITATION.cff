@@ -9,3 +9,6 @@ authors:
   - family-names: Chen
     given-names: Yi-Hsin
 license: MIT
+version: 1.0.0
+doi: 10.5281/zenodo.20396939
+date-released: "2026-05-26"
