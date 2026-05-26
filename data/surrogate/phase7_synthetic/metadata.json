@@ -1,0 +1,93 @@
+{
+  "phase": "4b",
+  "split_strategy": "instance_stratified",
+  "split_info": {
+    "small": {
+      "total_instances": 20,
+      "train_instances": 16,
+      "val_instances": 2,
+      "test_instances": 2,
+      "train_seeds": [
+        1542,
+        942,
+        1442,
+        742,
+        1242,
+        1042,
+        642,
+        1942,
+        342,
+        42,
+        1642,
+        542,
+        1142,
+        1842,
+        242,
+        442
+      ],
+      "val_seeds": [
+        1742,
+        142
+      ],
+      "test_seeds": [
+        1342,
+        842
+      ]
+    },
+    "medium": {
+      "total_instances": 15,
+      "train_instances": 12,
+      "val_instances": 1,
+      "test_instances": 2,
+      "train_seeds": [
+        1342,
+        942,
+        1442,
+        542,
+        442,
+        42,
+        842,
+        742,
+        1242,
+        242,
+        1142,
+        1042
+      ],
+      "val_seeds": [
+        342
+      ],
+      "test_seeds": [
+        642,
+        142
+      ]
+    },
+    "large": {
+      "total_instances": 10,
+      "train_instances": 8,
+      "val_instances": 1,
+      "test_instances": 1,
+      "train_seeds": [
+        342,
+        242,
+        642,
+        542,
+        142,
+        442,
+        842,
+        42
+      ],
+      "val_seeds": [
+        742
+      ],
+      "test_seeds": [
+        942
+      ]
+    }
+  },
+  "total_time_seconds": 900.9015121459961,
+  "total_samples": 25800,
+  "n_train": 20640,
+  "n_val": 2280,
+  "n_test": 2880,
+  "seed": 42
+}

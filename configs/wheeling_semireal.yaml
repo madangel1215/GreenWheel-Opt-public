@@ -1,0 +1,59 @@
+# Semi-real Green Energy Wheeling Configuration
+# Real Taipower generation + synthetic demand
+# 半真實資料：台電真實發電 + 合成需求
+
+data:
+  source: semireal
+  taipower_json_path: data/raw/taipower_37331.json
+  taipower_month: null          # null = auto-select best window
+  use_real_capacities: true     # use actual plant MW ratings
+
+instance:
+  n_generators: 10       # m: selected from Taipower plants
+  n_consumers: 20        # n: synthetic corporate buyers
+  n_days: 30             # billing month
+
+  generators:
+    solar:
+      capacity_range_kw: [500, 5000]    # fallback if use_real_capacities=false
+      ppa_price_range: [3.5, 5.0]       # NTD/kWh (synthetic, real PPAs not public)
+      fraction: 0.7
+    wind:
+      capacity_range_kw: [2000, 10000]
+      ppa_price_range: [5.0, 7.0]
+
+  consumers:
+    demand_peak_range_kw: [100, 2000]
+    contract_coverage_range: [0.3, 0.8]
+    re100_target_range: [0.5, 1.0]
+    retail_price_range: [4.5, 7.5]
+
+  market:
+    surplus_price: 1.0
+    wheeling_fee: 0.75
+    fairness_tolerance: 0.15
+    re100_penalty_weight: 2.0
+
+# Solar/wind profile params (used only for synthetic fallback)
+solar:
+  latitude: 24.0
+  longitude: 120.5
+  cloud_cover_beta_a: 2.0
+  cloud_cover_beta_b: 5.0
+
+wind:
+  weibull_k: 2.0
+  weibull_c_range: [7.0, 9.0]
+  autocorrelation: 0.95
+
+# NSGA-II optimization (same as Phase 1)
+optimization:
+  population_size: 100
+  n_generations: 200
+  crossover:
+    prob: 0.9
+    eta: 20
+  mutation:
+    eta: 20
+  min_weight_threshold: 0.01
+  seed: 42

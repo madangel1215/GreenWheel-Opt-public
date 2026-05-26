@@ -1,0 +1,40 @@
+# SA-MOEA (Surrogate-Assisted MOEA) Configuration
+# Pre-screening strategy using GNN surrogate for ranking
+# Supports NSGA-II, MOEA/D, and NSGA-III as base optimizers
+
+samoea:
+  # Base algorithm: "nsga2", "moead", "nsga3"
+  base_algorithm: nsga2
+
+  # Fraction of population evaluated with true simulator each generation
+  correction_fraction: 0.5
+
+  # Number of initial generations using only true simulator
+  warmup_generations: 10
+
+  # Interval (in generations) for full true-simulator evaluation
+  full_eval_interval: 20
+
+  # Fraction of correction slots reserved for random exploration
+  random_exploration_ratio: 0.1
+
+optimization:
+  population_size: 100
+  n_generations: 200
+  crossover:
+    prob: 0.9
+    eta: 20.0
+  mutation:
+    eta: 20.0
+  min_weight_threshold: 0.01
+
+# MOEA/D-specific parameters
+moead:
+  n_neighbors: 20
+  prob_neighbor_mating: 0.9
+  penalty_weight: 100.0
+
+# NSGA-III / MOEA/D reference direction partitions
+# For 3 objectives: n_partitions=12 → C(14,2)=91 ref dirs
+ref_dirs:
+  n_partitions: 12

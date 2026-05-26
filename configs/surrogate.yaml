@@ -1,0 +1,97 @@
+# GNN Surrogate Hyperparameters for WheelingGNN
+# Step 4: GNN Surrogate for Wheeling Allocation
+
+model:
+  gen_in: 8
+  con_in: 11
+  edge_dim: 3
+  global_dim: 6
+  hidden_dim: 64
+  n_layers: 3
+  heads: 4
+  dropout: 0.1
+
+training:
+  learning_rate: 0.001
+  weight_decay: 0.00001
+  epochs: 300
+  patience: 30
+  batch_size: 64
+  min_lr: 0.000001
+  profit_weight: 0.34
+  surplus_weight: 0.33
+  shortfall_weight: 0.33
+
+data:
+  # Phase 4A: single-instance proof-of-concept
+  phase4a:
+    scale: medium          # 10×20
+    n_generators: 10
+    n_consumers: 20
+    n_instances: 1
+    samples_per_instance: 5000
+    split_ratio: [0.8, 0.1, 0.1]  # train/val/test
+
+  # Phase 4B: cross-instance generalization
+  phase4b:
+    scales:
+      small:
+        n_generators: 5
+        n_consumers: 10
+        n_instances: 20
+        samples_per_instance: 400
+      medium:
+        n_generators: 10
+        n_consumers: 20
+        n_instances: 15
+        samples_per_instance: 500
+      large:
+        n_generators: 20
+        n_consumers: 50
+        n_instances: 10
+        samples_per_instance: 500
+    split_ratio: [0.8, 0.1, 0.1]
+
+  # Phase 6F: retrain with xlarge for large-scale SA-MOEA
+  phase6f:
+    scales:
+      small:
+        n_generators: 5
+        n_consumers: 10
+        n_instances: 15
+        samples_per_instance: 400
+      medium:
+        n_generators: 10
+        n_consumers: 20
+        n_instances: 10
+        samples_per_instance: 500
+      large:
+        n_generators: 20
+        n_consumers: 50
+        n_instances: 8
+        samples_per_instance: 500
+      xlarge:
+        n_generators: 50
+        n_consumers: 100
+        n_instances: 5
+        samples_per_instance: 300
+    split_ratio: [0.8, 0.1, 0.1]
+
+sampling:
+  lhs_fraction: 0.6
+  nsga2_fraction: 0.3
+  pareto_perturbation_fraction: 0.1
+  nsga2_pop_size: 50
+  nsga2_generations: 200
+  snapshot_generations: [0, 50, 100, 150, 200]
+  perturbation_sigma_range: [0.05, 0.15]
+  perturbation_per_solution: 5
+
+validation:
+  # Kill-switch thresholds
+  phase4a_spearman_gate: 0.9
+  phase4b_spearman_gate: 0.85
+  phase4c_hv_loss_gate: 0.05
+
+device: auto  # auto, mps, cuda, cpu
+checkpoint_dir: checkpoints/surrogate
