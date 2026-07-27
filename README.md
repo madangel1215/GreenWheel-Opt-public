@@ -55,6 +55,34 @@ Semi-real instances use public Taipower generation data; see
 `scripts/download_taipower.py`. Random seeds and train/validation/test
 partitions are recorded in the `metadata.json` files.
 
+### Surrogate reliability and screening behaviour
+
+Four further studies characterise when pre-screening helps and when it does not.
+Each shares the seeds and the per-instance reference-point protocol of the main
+semi-real experiment, so their numbers are directly comparable to it.
+
+```bash
+# Rank agreement between surrogate and simulator measured during the run,
+# on the full-evaluation generations where exact labels are already available.
+python scripts/run_sp_trajectory.py --scales medium,large --n-seeds 5
+
+# Whether retaining screened-out offspring with predicted objectives, instead
+# of discarding them, removes the harm caused by surrogate false negatives.
+python scripts/run_recoverability_experiment.py --scales small,medium,large --n-seeds 10
+
+# Optimization quality on semi-real instances at the largest scale tested
+# (50 generators x 100 consumers, 5,000 decision variables). Shardable by seed.
+python scripts/run_xlarge_semireal.py --device cuda --seeds 0,1
+
+# Attention coefficients of the deployed model, and whether they concentrate
+# on generator-consumer pairs that carry economically meaningful edge features.
+python scripts/run_attention_analysis.py --scale medium --n-seeds 5
+```
+
+A reduced surrogate configuration (`configs/surrogate_tiny.yaml`) is provided for
+the inference-cost analysis: it cuts the parameter count by roughly a factor of
+six while matching the deployed model's held-out ranking accuracy.
+
 ## License
 
 MIT License (see `LICENSE`).

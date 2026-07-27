@@ -23,6 +23,7 @@ import time
 from dataclasses import dataclass, field
 
 import numpy as np
+from scipy.stats import kendalltau, spearmanr
 from pymoo.algorithms.moo.moead import MOEAD
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.algorithms.moo.nsga3 import NSGA3
@@ -44,6 +45,7 @@ from src.greenwheel.problem.repair import AllocationRepair
 from src.greenwheel.simulator.matching import simulate_matching
 from src.greenwheel.surrogate.inference import BatchSurrogate
 
+
 @dataclass
 class SAMOEAConfig:
     """Configuration for surrogate-assisted MOEA.
@@ -59,6 +61,25 @@ class SAMOEAConfig:
     warmup_generations: int = 10
     full_eval_interval: int = 20
     random_exploration_ratio: float = 0.1
+
+    # Screening recoverability.
+    # "discard": screened-out offspring are dropped permanently (default;
+    #     leaves the original behaviour bit-identical).
+    # "retain": screened-out offspring are carried into survival selection with
+    #     surrogate-predicted objectives, so a false negative costs a delayed
+    #     evaluation rather than a permanently lost candidate. Constraints stay
+    #     exact in both modes -- they are algebraic and never approximated.
+    screening_mode: str = "discard"
+
+    # Measurement-only in-run reliability probe. Full-evaluation generations
+    # already produce exact labels for a population drawn from the deployed
+    # instance's own distribution, and the surrogate is otherwise never asked to
+    # predict them. One extra forward pass therefore yields the surrogate's
+    # pairwise concordance on that population at zero simulation cost.
+    # Reported as sp = (1 + tau) / 2, the accuracy scale of Hanawa et al.,
+    # Array 27 (2025) 100461. The probe never influences selection.
+    probe_enabled: bool = False
+    probe_min_size: int = 10
 
     # Common MOEA parameters
     population_size: int = 100
@@ -77,6 +98,7 @@ class SAMOEAConfig:
     # For 3 objectives: n_partitions=12 → C(14,2)=91 ref dirs
     n_partitions: int = 12
 
+
 @dataclass
 class SAMOEAStats:
     """Per-generation statistics for SA-MOEA tracking."""
@@ -86,6 +108,14 @@ class SAMOEAStats:
     n_true_evals: int
     n_surr_evals: int
     hv: float = 0.0
+    n_retained: int = 0  # screened-out offspring carried forward (retain mode only)
+    # Measurement-only probe, populated on full-evaluation generations when
+    # config.probe_enabled. Each is per objective [-profit, surplus, shortfall].
+    n_probe: int = 0                      # candidates scored by the probe
+    probe_tau: list[float] | None = None  # Kendall tau vs exact objectives
+    probe_sp: list[float] | None = None   # pairwise concordance (1 + tau) / 2
+    probe_rho: list[float] | None = None  # Spearman rho vs exact objectives
+
 
 @dataclass
 class SAMOEAResult:
@@ -121,6 +151,7 @@ class SAMOEAResult:
             for gen, F in self.fronts_history
         ]
 
+
 def _evaluate_true_batch(
     X: np.ndarray,
     instance: WheelingInstance,
@@ -151,6 +182,34 @@ def _evaluate_true_batch(
         F[i, 2] = result.total_shortfall
 
     return F
+
+
+def _repair_batch_inplace(
+    X: np.ndarray,
+    instance: WheelingInstance,
+) -> None:
+    """Apply the same in-place repair that ``_evaluate_true_batch`` performs.
+
+    ``_evaluate_true_batch`` normalizes each allocation matrix (thresholding
+    tiny weights, rescaling over-allocated generator rows) as a side effect of
+    evaluation, so truly-evaluated offspring re-enter the population repaired.
+    In ``screening_mode="retain"`` the screened-out offspring are not evaluated
+    yet still enter survival selection, so they must undergo the identical
+    repair or the two groups would carry inconsistent decision vectors.
+
+    Args:
+        X: Decision vectors, shape (n_solutions, m*n). Modified in place.
+        instance: Problem instance.
+    """
+    m, n = instance.m, instance.n
+    for i in range(len(X)):
+        W = X[i].reshape(m, n)
+        W[W < 0.01] = 0.0
+        row_sums = W.sum(axis=1)
+        over = row_sums > 1.0
+        if over.any():
+            W[over] /= row_sums[over, np.newaxis]
+
 
 def _compute_constraints_batch(
     X: np.ndarray,
@@ -194,6 +253,7 @@ def _compute_constraints_batch(
 
     return G
 
+
 def _compute_penalty_batch(
     X: np.ndarray,
     instance: WheelingInstance,
@@ -234,6 +294,7 @@ def _compute_penalty_batch(
         penalties[k] = violation
 
     return penalties
+
 
 def _select_for_true_eval(
     F_surr: np.ndarray,
@@ -288,6 +349,7 @@ def _select_for_true_eval(
 
     selected = np.array(ranked_indices + random_indices, dtype=int)
     return selected
+
 
 def _create_base_algorithm(
     config: SAMOEAConfig,
@@ -359,6 +421,7 @@ def _create_base_algorithm(
             f"Unknown base_algorithm: {config.base_algorithm!r}. "
             f"Must be 'nsga2', 'moead', or 'nsga3'."
         )
+
 
 def run_samoea(
     instance: WheelingInstance,
@@ -452,12 +515,34 @@ def run_samoea(
         # Skip pre-screening when candidate count <= n_select (nothing to filter)
         skip_prescreening = pop_size_actual <= n_select
 
+        # Probe results default to unset; only full-evaluation generations can
+        # populate them, because only there are exact labels available for free.
+        n_probe = 0
+        probe_tau = probe_sp = probe_rho = None
+
         if is_warmup or is_full_eval or skip_prescreening:
             # Full true evaluation - all solutions
             mode = "warmup" if is_warmup else ("full_eval" if is_full_eval else "direct")
             F = _evaluate_true_batch(X, instance)
             n_true = pop_size_actual
             n_surr = 0
+            n_retained = 0
+
+            # Measurement-only reliability probe. The exact labels above are
+            # already paid for, so one extra forward pass measures how well the
+            # surrogate orders *this* population -- the quantity pre-screening
+            # actually depends on, as opposed to held-out global correlation.
+            # X has already been repaired in place by the evaluator, so probe
+            # and exact objectives refer to identical decision vectors.
+            if config.probe_enabled and pop_size_actual >= config.probe_min_size:
+                pr_p, su_p, sh_p = surrogate.evaluate_batch(X)
+                F_probe = np.column_stack([-pr_p, su_p, sh_p])
+                probe_tau = [float(kendalltau(F_probe[:, j], F[:, j])[0])
+                             for j in range(3)]
+                probe_rho = [float(spearmanr(F_probe[:, j], F[:, j])[0])
+                             for j in range(3)]
+                probe_sp = [(1.0 + t) / 2.0 for t in probe_tau]
+                n_probe = pop_size_actual
 
             # MOEA/D yields Individual (not Population): squeeze to 1D so
             # off.F stays (n_obj,) and PBI decomposition works correctly.
@@ -498,18 +583,45 @@ def run_samoea(
             F_sel = _evaluate_true_batch(X_sel, instance)
             n_true = len(selected)
 
-            # Step 4: Create a filtered population with only truly-evaluated
-            # solutions. MOEA will merge parents + infills and do selection.
-            infills = Population.new("X", X_sel)
+            # Step 4: Build the infill population.
+            #
+            # "discard": only truly-evaluated offspring are returned; the rest
+            #     are dropped permanently, so a surrogate false negative
+            #     destroys the candidate irrecoverably.
+            # "retain": every offspring is returned, screened-out ones carrying
+            #     surrogate-predicted objectives, so a false negative only
+            #     delays evaluation instead of deleting the candidate.
+            #
+            # In both cases the MOEA merges parents + infills and runs survival
+            # selection; constraints are algebraic and therefore exact for all
+            # offspring regardless of mode.
+            if config.screening_mode == "retain":
+                rest = np.setdiff1d(np.arange(pop_size_actual), selected)
+                # Screened-out offspring never pass through the evaluator, so
+                # apply the identical repair that evaluation would have applied.
+                X_rest = X[rest].copy()
+                _repair_batch_inplace(X_rest, instance)
+                X_inf = np.empty_like(X)
+                X_inf[selected] = X_sel
+                X_inf[rest] = X_rest
+                F_inf = F_surr.copy()
+                F_inf[selected] = F_sel
+                n_retained = len(rest)
+            else:
+                X_inf = X_sel
+                F_inf = F_sel
+                n_retained = 0
+
+            infills = Population.new("X", X_inf)
 
             if use_penalty:
-                penalties = _compute_penalty_batch(X_sel, instance)
-                F_penalized = F_sel + config.penalty_weight * penalties[:, np.newaxis]
+                penalties = _compute_penalty_batch(X_inf, instance)
+                F_penalized = F_inf + config.penalty_weight * penalties[:, np.newaxis]
                 infills.set("F", F_penalized)
             else:
-                G_sel = _compute_constraints_batch(X_sel, instance)
-                infills.set("F", F_sel)
-                infills.set("G", G_sel)
+                G_inf = _compute_constraints_batch(X_inf, instance)
+                infills.set("F", F_inf)
+                infills.set("G", G_inf)
 
             algorithm.tell(infills=infills)
 
@@ -532,6 +644,11 @@ def run_samoea(
             n_true_evals=n_true,
             n_surr_evals=n_surr,
             hv=hv_val,
+            n_retained=n_retained,
+            n_probe=n_probe,
+            probe_tau=probe_tau,
+            probe_sp=probe_sp,
+            probe_rho=probe_rho,
         ))
 
         if verbose and (gen % 50 == 0 or gen == config.n_generations - 1):

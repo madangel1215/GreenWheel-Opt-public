@@ -38,6 +38,7 @@ from src.greenwheel.surrogate.training import load_trained_model
 SIZE = {"medium": (10, 20), "large": (20, 50)}
 OBJS = ["profit", "surplus", "shortfall"]
 
+
 def _topk(F, k):
     """Indices selected by top non-dominated fronts up to k (minimization)."""
     fronts = NonDominatedSorting().do(np.asarray(F), only_non_dominated_front=False)
@@ -47,6 +48,7 @@ def _topk(F, k):
         if len(sel) >= k:
             break
     return set(sel[:k])
+
 
 def _analyze(samples, surrogate):
     """samples: list of (W, profit, surplus, shortfall). Returns metrics dict."""
@@ -65,6 +67,7 @@ def _analyze(samples, surrogate):
     return {"n": len(samples), "local_rho": rho,
             "mean_local_rho": float(np.mean(list(rho.values()))),
             "fn_rate": float(fn), "selection_overlap": len(sel_true & sel_pred) / max(1, len(sel_true))}
+
 
 def main():
     p = argparse.ArgumentParser()
@@ -90,6 +93,7 @@ def main():
         for scale in args.scales.split(","):
             m, n = SIZE[scale]
             glob_rho, glob_fn, loc_rho, loc_fn = [], [], [], []
+            per_seed = []
             print(f"\n=== {dom} / {scale} ({m}x{n}) ===", flush=True)
             for i in range(args.n_seeds):
                 sd = 95000 + i * 100
@@ -103,11 +107,28 @@ def main():
                 l = _analyze(loc_samples, surrogate)
                 glob_rho.append(g["mean_local_rho"]); glob_fn.append(g["fn_rate"])
                 loc_rho.append(l["mean_local_rho"]); loc_fn.append(l["fn_rate"])
+                # Persist per-seed, per-objective rho so that alternative gate
+                # aggregations (min vs mean over objectives) can be evaluated
+                # without re-running. The published table reports the mean.
+                per_seed.append({
+                    "seed": sd,
+                    "global": {"rho_per_obj": g["local_rho"], "rho_mean": g["mean_local_rho"],
+                               "rho_min": float(min(g["local_rho"].values())),
+                               "fn_rate": g["fn_rate"]},
+                    "local": {"rho_per_obj": l["local_rho"], "rho_mean": l["mean_local_rho"],
+                              "rho_min": float(min(l["local_rho"].values())),
+                              "fn_rate": l["fn_rate"]},
+                })
                 print(f"  seed {i+1}: GLOBAL ρ={g['mean_local_rho']:.3f} FN={g['fn_rate']:.2f} | "
-                      f"LOCAL ρ={l['mean_local_rho']:.3f} FN={l['fn_rate']:.2f} ({time.time()-t0:.0f}s)", flush=True)
+                      f"LOCAL ρ={l['mean_local_rho']:.3f} (min {min(l['local_rho'].values()):.3f}) "
+                      f"FN={l['fn_rate']:.2f} ({time.time()-t0:.0f}s)", flush=True)
             report[dom][scale] = {
                 "global_mean_rho": float(np.mean(glob_rho)), "global_fn_rate": float(np.mean(glob_fn)),
                 "local_mean_rho": float(np.mean(loc_rho)), "local_fn_rate": float(np.mean(loc_fn)),
+                "local_rho_std": float(np.std(loc_rho)),
+                "local_rho_min_seed": float(np.min(loc_rho)),
+                "local_rho_max_seed": float(np.max(loc_rho)),
+                "per_seed": per_seed,
             }
             r = report[dom][scale]
             print(f"  >>> GLOBAL ρ={r['global_mean_rho']:.3f} FN={r['global_fn_rate']:.2f} | "
@@ -115,6 +136,7 @@ def main():
 
     json.dump(report, open(out / "results.json", "w"), indent=2, default=str)
     print(f"\nSaved -> {out}/results.json", flush=True)
+
 
 if __name__ == "__main__":
     main()
