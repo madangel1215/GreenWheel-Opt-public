@@ -46,6 +46,8 @@ class BatchSurrogate:
         self.device = get_device(device)
         self.model = self.model.to(self.device)
         self.model.eval()
+        # The edge-feature width the model was trained on is recorded in its norm stats.
+        self.temporal = len(norm.edge_mean) > 3
 
         # Cached instance data
         self._instance: WheelingInstance | None = None
@@ -97,7 +99,7 @@ class BatchSurrogate:
             if over.any():
                 W_rep[over] /= row_sums[over, np.newaxis]
 
-            graph = instance_to_heterodata(instance, W_rep)
+            graph = instance_to_heterodata(instance, W_rep, temporal=self.temporal)
             data_list.append(graph)
 
         # Normalize input features (critical: model was trained on normalized data)

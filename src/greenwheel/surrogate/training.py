@@ -36,6 +36,38 @@ class TrainConfig:
     surplus_weight: float = 0.33
     shortfall_weight: float = 0.33
     early_stop_metric: str = "val_loss"  # "val_loss" or "spearman"
+    # On MPS every new batch shape is compiled and cached for good; mixed-size retailer
+    # batches grew driver memory past 170 GB in one epoch. One instance per batch
+    # keeps the shapes to a few hundred.
+    batch_by_instance: bool = False
+    # Weight of the per-buyer loss on the soft-min node scores. Supervising only the
+    # graph-level minimum let the model learn "the largest buyer is the bottleneck".
+    buyer_loss_weight: float = 0.0
+
+class InstanceBatchSampler(torch.utils.data.Sampler):
+    """Batches drawn from one instance at a time; samples and batch order reshuffled each epoch."""
+
+    def __init__(self, data_list: list, batch_size: int, shuffle: bool):
+        groups: dict = {}
+        for i, d in enumerate(data_list):
+            groups.setdefault(d.instance_key, []).append(i)
+        self.groups, self.batch_size, self.shuffle = list(groups.values()), batch_size, shuffle
+
+    def _batches(self, rng):
+        out = []
+        for g in self.groups:
+            g = [g[k] for k in rng.permutation(len(g))] if rng is not None else g
+            out += [g[i:i + self.batch_size] for i in range(0, len(g), self.batch_size)]
+        if rng is not None:
+            out = [out[k] for k in rng.permutation(len(out))]
+        return out
+
+    def __iter__(self):
+        rng = np.random.default_rng(int(torch.randint(0, 2**31 - 1, (1,)))) if self.shuffle else None
+        return iter(self._batches(rng))
+
+    def __len__(self):
+        return sum(-(-len(g) // self.batch_size) for g in self.groups)
 
 @dataclass
 class NormStats:
@@ -243,10 +275,24 @@ def train_surrogate(
         d.y = norm.normalize_targets(d.y.unsqueeze(0)).squeeze(0)
     for d in val_data:
         d.y = norm.normalize_targets(d.y.unsqueeze(0)).squeeze(0)
+    if config.buyer_loss_weight > 0:
+        # Buyer fulfilment shares the units of the worst-fulfilment target (column k), so it
+        # gets that column's normalisation and the soft minimum of the scores stays comparable.
+        k = model_kwargs["min_outputs"][0]
+        name = ("profit", "surplus", "shortfall")[k]
+        mu, sd = getattr(norm, f"mean_{name}"), getattr(norm, f"std_{name}")
+        for d in train_data + val_data:
+            d["con"].y_buyer = (d["con"].y_buyer - mu) / (sd + 1e-8)
 
     # DataLoaders
-    train_loader = DataLoader(train_data, batch_size=config.batch_size, shuffle=True)
-    val_loader = DataLoader(val_data, batch_size=config.batch_size, shuffle=False)
+    if config.batch_by_instance:
+        train_loader = DataLoader(train_data, batch_sampler=InstanceBatchSampler(
+            train_data, config.batch_size, shuffle=True))
+        val_loader = DataLoader(val_data, batch_sampler=InstanceBatchSampler(
+            val_data, config.batch_size, shuffle=False))
+    else:
+        train_loader = DataLoader(train_data, batch_size=config.batch_size, shuffle=True)
+        val_loader = DataLoader(val_data, batch_size=config.batch_size, shuffle=False)
 
     # Model
     model = WheelingGNN(**model_kwargs).to(dev)
@@ -292,6 +338,10 @@ def train_surrogate(
                 + config.surplus_weight * loss_fn(pred[:, 1], target[:, 1])
                 + config.shortfall_weight * loss_fn(pred[:, 2], target[:, 2])
             )
+
+            if config.buyer_loss_weight > 0:
+                loss = loss + config.buyer_loss_weight * loss_fn(
+                    model.min_node_scores[0], batch["con"].y_buyer.to(dev))
 
             optimizer.zero_grad()
             loss.backward()

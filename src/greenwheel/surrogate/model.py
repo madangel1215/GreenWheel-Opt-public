@@ -12,6 +12,7 @@ import torch.nn as nn
 from torch_geometric.nn import (
     GATConv, GATv2Conv, HeteroConv, TransformerConv, global_mean_pool,
 )
+from torch_geometric.utils import scatter
 
 class WheelingGNN(nn.Module):
     """Heterogeneous GNN surrogate predicting (profit_norm, surplus_norm, shortfall_norm).
@@ -26,6 +27,8 @@ class WheelingGNN(nn.Module):
         heads: Number of attention heads in GATv2 (default: 4).
         dropout: Dropout rate in prediction MLP (default: 0.1).
         n_outputs: Number of output objectives (default: 3).
+        min_outputs: Output indices read out as a soft minimum over consumer nodes instead
+            of from the mean-pooled MLP (default: none).
     """
 
     def __init__(
@@ -40,6 +43,7 @@ class WheelingGNN(nn.Module):
         dropout: float = 0.1,
         n_outputs: int = 3,
         conv_type: str = "gatv2",
+        min_outputs: tuple = (),
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -88,6 +92,15 @@ class WheelingGNN(nn.Module):
 
         # Prediction MLP: 2 * hidden_dim (pooled) + global_dim → n_outputs objectives
         mlp_in = 2 * hidden_dim + global_dim
+        # A target defined as the minimum over buyers (worst fulfilment) cannot be read from a
+        # mean: on converged fronts the mean-pooled model ranked it backwards. Each
+        # consumer gets a score in its graph's context and the graph takes their soft minimum.
+        self.min_outputs = tuple(int(k) for k in min_outputs)
+        self.min_heads = nn.ModuleList(nn.Sequential(
+            nn.Linear(hidden_dim + mlp_in, 64), nn.ReLU(), nn.Linear(64, 1))
+            for _ in self.min_outputs)
+        if self.min_outputs:  # absent otherwise, so checkpoints of the mean-only model still load
+            self.min_log_tau = nn.Parameter(torch.full((len(self.min_outputs),), -1.0))
         self.predictor = nn.Sequential(
             nn.Linear(mlp_in, 128),
             nn.ReLU(),
@@ -155,7 +168,22 @@ class WheelingGNN(nn.Module):
         else:
             graph_repr = torch.cat([gen_pool, con_pool], dim=-1)
 
-        return self.predictor(graph_repr)  # (B, n_outputs)
+        out = self.predictor(graph_repr)  # (B, n_outputs)
+        if not self.min_outputs:
+            return out
+        cols = list(out.unbind(dim=1))
+        self.min_node_scores = [None] * len(self.min_outputs)  # read by the per-buyer loss
+        ctx = graph_repr[con_batch]
+        for j, k in enumerate(self.min_outputs):
+            tau = torch.nn.functional.softplus(self.min_log_tau[j]) + 1e-3
+            node = self.min_heads[j](torch.cat([h["con"], ctx], dim=-1)).squeeze(-1)
+            self.min_node_scores[j] = node
+            z = -node / tau
+            zmax = scatter(z, con_batch, dim=0, dim_size=out.size(0), reduce="max").detach()
+            lse = torch.log(scatter(torch.exp(z - zmax[con_batch]), con_batch, dim=0,
+                                    dim_size=out.size(0), reduce="sum")) + zmax
+            cols[k] = -tau * lse
+        return torch.stack(cols, dim=1)
 
     @staticmethod
     def from_heterodata(data, model):

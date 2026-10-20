@@ -188,6 +188,7 @@ def generate_semireal_instance(
             n_days=n_days,
             month=config.taipower_month,
             seed=seed,
+            exclude_offline=config.exclude_offline_plants,
         )
     )
 

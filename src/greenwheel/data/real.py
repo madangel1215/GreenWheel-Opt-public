@@ -262,6 +262,7 @@ def select_plants(
     n_wind: int,
     window: tuple[pd.Timestamp, pd.Timestamp],
     seed: int = 42,
+    exclude_offline: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Select plants via stratified sampling across capacity quantiles.
 
@@ -298,6 +299,11 @@ def select_plants(
 
         if len(good_plants) == 0:
             raise ValueError(f"No {tech} plants with >60% valid data in window")
+
+        if exclude_offline:
+            # Offline = zero output in every interval of the window, not merely low output.
+            online = window_df[good_plants].max() > 0
+            good_plants = [p for p in good_plants if online[p]]
 
         window_df = window_df[good_plants]
 
@@ -452,6 +458,7 @@ def build_generation_profiles(
     n_days: int = 30,
     month: int | None = None,
     seed: int = 42,
+    exclude_offline: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, list[float], list[float], dict]:
     """Build generation profile arrays from real Taipower data.
 
@@ -480,7 +487,8 @@ def build_generation_profiles(
     start, end = window
 
     # Step 2: Select plants
-    solar_df, wind_df = select_plants(data, n_solar, n_wind, window, seed=seed)
+    solar_df, wind_df = select_plants(data, n_solar, n_wind, window, seed=seed,
+                                      exclude_offline=exclude_offline)
 
     metadata = {
         "window_start": str(start),

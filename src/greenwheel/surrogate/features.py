@@ -96,9 +96,58 @@ def extract_consumer_features(instance: WheelingInstance) -> torch.Tensor:
 
     return torch.tensor(feats, dtype=torch.float32)
 
+def temporal_pair_features(instance: WheelingInstance) -> np.ndarray:
+    """Per-pair temporal coincidence features, independent of W.
+
+    The objectives are settled interval by interval as min(sum_i W_ij G_it, D_jt),
+    so what a generator is worth to a consumer depends on whether their profiles
+    coincide in time. The monthly summaries in the node features cannot express
+    this: on semi-real instances they explain only 87% of the variance in pairwise
+    shape overlap, against 99% on synthetic ones. Computed once per instance and cached on it.
+
+    Features (3 per edge, row-major like extract_edge_features):
+        0: shape overlap, sum_t min(g_it/sum g_i, d_jt/sum d_j), in [0, 1]
+        1: Pearson correlation of G_i and D_j (0 if either is constant)
+        2: coverage, sum_t min(G_it, D_jt) / sum_t D_jt, in [0, 1]
+
+    Returns:
+        Array of shape (m*n, 3), float32.
+    """
+    cached = getattr(instance, "_temporal_pair_cache", None)
+    if cached is not None:
+        return cached
+
+    G = np.array([g.generation for g in instance.generators], dtype=np.float64)
+    D = np.array([c.demand for c in instance.consumers], dtype=np.float64)
+    m, n = G.shape[0], D.shape[0]
+
+    g_tot = G.sum(axis=1, keepdims=True)
+    d_tot = D.sum(axis=1, keepdims=True)
+    Gs = np.divide(G, g_tot, out=np.zeros_like(G), where=g_tot > 0)
+    Ds = np.divide(D, d_tot, out=np.zeros_like(D), where=d_tot > 0)
+
+    Gc = G - G.mean(axis=1, keepdims=True)
+    Dc = D - D.mean(axis=1, keepdims=True)
+    g_norm = np.linalg.norm(Gc, axis=1)
+    d_norm = np.linalg.norm(Dc, axis=1)
+    denom = np.outer(g_norm, d_norm)
+    corr = np.divide(Gc @ Dc.T, denom, out=np.zeros((m, n)), where=denom > 0)
+
+    overlap = np.empty((m, n))
+    coverage = np.empty((m, n))
+    for i in range(m):
+        overlap[i] = np.minimum(Gs[i][None, :], Ds).sum(axis=1)
+        covered = np.minimum(G[i][None, :], D).sum(axis=1)
+        coverage[i] = np.divide(covered, d_tot[:, 0], out=np.zeros(n), where=d_tot[:, 0] > 0)
+
+    feats = np.stack([overlap, corr, coverage], axis=-1).reshape(m * n, 3).astype(np.float32)
+    instance._temporal_pair_cache = feats
+    return feats
+
 def extract_edge_features(
     W: np.ndarray,
     instance: WheelingInstance,
+    temporal: bool = False,
 ) -> torch.Tensor:
     """Extract edge features for all generator-consumer pairs.
 
@@ -132,6 +181,9 @@ def extract_edge_features(
             feats[idx, 1] = retail_prices[j] - ppa_prices[i]
             feats[idx, 2] = total_gens[i] / total_demands[j] if total_demands[j] > 0 else 0.0
             idx += 1
+
+    if temporal:
+        feats = np.concatenate([feats, temporal_pair_features(instance)], axis=1)
 
     return torch.tensor(feats, dtype=torch.float32)
 

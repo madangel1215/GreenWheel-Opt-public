@@ -20,6 +20,7 @@ def instance_to_heterodata(
     instance: WheelingInstance,
     W: np.ndarray,
     targets: np.ndarray | None = None,
+    temporal: bool = False,
 ) -> HeteroData:
     """Convert a wheeling instance and allocation matrix to a HeteroData graph.
 
@@ -50,11 +51,11 @@ def instance_to_heterodata(
     con_idx = torch.arange(n).repeat(m)              # [0,1,...,n-1, 0,1,...,n-1, ...]
 
     data["gen", "supplies", "con"].edge_index = torch.stack([gen_idx, con_idx])
-    data["gen", "supplies", "con"].edge_attr = extract_edge_features(W, instance)
+    data["gen", "supplies", "con"].edge_attr = extract_edge_features(W, instance, temporal=temporal)
 
     # Reverse edges: con→gen (same features, same connectivity)
     data["con", "demands", "gen"].edge_index = torch.stack([con_idx, gen_idx])
-    data["con", "demands", "gen"].edge_attr = extract_edge_features(W, instance)
+    data["con", "demands", "gen"].edge_attr = extract_edge_features(W, instance, temporal=temporal)
 
     # --- Global features (stored as (1, 6) so PyG batches to (B, 6)) ---
     data.global_feat = extract_global_features(instance).unsqueeze(0)  # (1, 6)

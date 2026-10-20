@@ -209,6 +209,11 @@ class WheelingConfig:
     taipower_json_path: str = "data/raw/taipower_37331.json"
     taipower_month: int | None = None  # restrict window to this month (1-12)
     use_real_capacities: bool = True  # use real plant capacities (not synthetic ranges)
+    # Off by default so every published semi-real result reproduces bit-identically.
+    # The published sampler draws from the lowest-output stratum, which in the
+    # 2025-07 window contains three plants with zero output all month (卓蘭, 大潭,
+    # 澎湖中屯); a retailer would never allocate a plant that is offline.
+    exclude_offline_plants: bool = False
 
     # Optimization
     population_size: int = 100
@@ -281,6 +286,7 @@ class WheelingConfig:
         cfg.taipower_json_path = dat.get("taipower_json_path", cfg.taipower_json_path)
         cfg.taipower_month = dat.get("taipower_month", cfg.taipower_month)
         cfg.use_real_capacities = dat.get("use_real_capacities", cfg.use_real_capacities)
+        cfg.exclude_offline_plants = dat.get("exclude_offline_plants", cfg.exclude_offline_plants)
 
         # Solar
         sol = raw.get("solar", {})

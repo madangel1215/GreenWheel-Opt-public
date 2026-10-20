@@ -15,10 +15,12 @@ Usage:
 """
 
 import argparse
+import json
 import pickle
 import sys
 from pathlib import Path
 
+import torch
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -54,6 +56,33 @@ def _filter_by_scale(data_list: list, scale: str) -> list:
             filtered.append(d)
     return filtered
 
+def _instance_relative(data_list: list) -> None:
+    """Z-score each objective within its own instance, in place.
+
+    On semi-real data 94-98% of target variance lies between instances, so a pooled
+    MSE mostly learns which instance a graph belongs to and almost ignores the
+    within-instance ordering that pre-screening acts on. Pre-screening only
+    non-dominated-sorts the predictions, which a positive per-objective affine map
+    leaves unchanged, so predictions in this space screen identically. They are
+    NOT absolute objective values and must not feed screening_mode="retain".
+
+    Instances are identified by their node features, which are W-independent.
+    """
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for d in data_list:
+        groups[d["gen"].x.numpy().tobytes() + d["con"].x.numpy().tobytes()].append(d)
+    for members in groups.values():
+        Y = torch.stack([d.y for d in members])
+        mu, sd = Y.mean(dim=0), Y.std(dim=0)
+        sd[sd < 1e-8] = 1.0
+        for d in members:
+            d.y = (d.y - mu) / sd
+            if "y_buyer" in d["con"]:
+                # Buyer fulfilment is in the units of worst fulfilment (y[1]), so it takes that
+                # column's instance statistics; the minimum over buyers then tracks y[1].
+                d["con"].y_buyer = (d["con"].y_buyer - mu[1]) / sd[1]
+
 def main():
     parser = argparse.ArgumentParser(description="Train surrogate model (GNN or MLP)")
     parser.add_argument("--config", default="configs/surrogate.yaml",
@@ -71,10 +100,21 @@ def main():
     parser.add_argument("--scale", default=None,
                         choices=["small", "medium", "large", "xlarge", "xxlarge"],
                         help="Filter data to specific scale (required for MLP)")
+    parser.add_argument("--instance-relative-targets", action="store_true",
+                        help="Z-score each objective within its instance before training")
+    parser.add_argument("--min-readout", type=int, nargs="+", default=[],
+                        help="Output indices read out as a soft minimum over consumers")
+    parser.add_argument("--buyer-loss-weight", type=float, default=0.0,
+                        help="Weight of the per-buyer fulfilment loss on the soft-min scores")
+    parser.add_argument("--batch-by-instance", action="store_true",
+                        help="Draw each batch from one instance (needed on MPS for mixed-size data)")
     parser.add_argument("--early-stop", default=None,
                         choices=["val_loss", "spearman"],
                         help="Early stopping metric (default: from config)")
     args = parser.parse_args()
+    if args.buyer_loss_weight > 0 and args.min_readout != [1]:
+        # _instance_relative scales y_buyer with column 1, the worst-fulfilment target.
+        parser.error("--buyer-loss-weight needs --min-readout 1")
 
     # Load config
     with open(args.config) as f:
@@ -100,6 +140,11 @@ def main():
             print("ERROR: No training samples match the specified scale!")
             sys.exit(1)
 
+    if args.instance_relative_targets:
+        _instance_relative(train_data)
+        _instance_relative(val_data)
+        print("  Targets z-scored within each instance")
+
     # Build TrainConfig
     tc = surr_cfg.get("training", {})
     train_cfg = TrainConfig(
@@ -113,13 +158,19 @@ def main():
         surplus_weight=tc.get("surplus_weight", 0.33),
         shortfall_weight=tc.get("shortfall_weight", 0.33),
         early_stop_metric=args.early_stop or tc.get("early_stop_metric", "val_loss"),
+        batch_by_instance=args.batch_by_instance,
+        buyer_loss_weight=args.buyer_loss_weight,
     )
 
     device = args.device or surr_cfg.get("device", "auto")
 
     if args.model_type == "gnn":
         # GNN training (original path)
-        model_kwargs = surr_cfg.get("model", {})
+        model_kwargs = dict(surr_cfg.get("model", {}))
+        if args.min_readout:
+            model_kwargs["min_outputs"] = tuple(args.min_readout)
+        # Follow the data: datasets built with temporal edge features have edge_dim 6.
+        model_kwargs["edge_dim"] = int(train_data[0]["gen", "supplies", "con"].edge_attr.shape[1])
         ckpt_dir = args.checkpoint_dir or surr_cfg.get("checkpoint_dir", "checkpoints/surrogate")
 
         model, norm, history = train_surrogate(
@@ -132,6 +183,11 @@ def main():
             verbose=True,
         )
         print(f"\nGNN training complete. Best model saved to {ckpt_dir}/best.pt")
+        with open(Path(ckpt_dir) / "target_mode.json", "w") as f:
+            json.dump({"instance_relative_targets": bool(args.instance_relative_targets),
+                       "batch_by_instance": bool(args.batch_by_instance),
+                       "min_readout": list(args.min_readout),
+                       "buyer_loss_weight": args.buyer_loss_weight}, f)
 
     else:
         # MLP training
