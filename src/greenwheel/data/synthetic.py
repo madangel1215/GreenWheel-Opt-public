@@ -189,6 +189,7 @@ def generate_semireal_instance(
             month=config.taipower_month,
             seed=seed,
             exclude_offline=config.exclude_offline_plants,
+            force_solar_replicates=config.force_solar_replicates,
         )
     )
 

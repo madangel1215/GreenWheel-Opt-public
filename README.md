@@ -15,7 +15,7 @@ surrogate (WheelingGNN).
 This repository accompanies the paper:
 
 > Ming-I Chen, Ying-Lin Hsu, Yi-Hsin Chen.
-> "A Graph Neural Network Surrogate for Multi-Objective Green Energy Wheeling Allocation."
+> "When Does a Graph Neural Network Surrogate Pay Off in Green Energy Wheeling Allocation?"
 
 If you use this code or data, please cite the paper (see `CITATION.cff`).
 
@@ -33,6 +33,7 @@ pip install -r requirements.txt
 - `configs/`: configuration files
 - `checkpoints/`: trained WheelingGNN surrogate checkpoints (synthetic and semi-real)
 - `data/surrogate/*/metadata.json`: dataset split metadata (seeds and partitions)
+- `docs/case_study_protocol.md`: protocol of the 2021 backtest and its amendments
 
 ## Reproducing the results
 
@@ -82,6 +83,48 @@ python scripts/run_attention_analysis.py --scale medium --n-seeds 5
 A reduced surrogate configuration (`configs/surrogate_tiny.yaml`) is provided for
 the inference-cost analysis: it cuts the parameter count by roughly a factor of
 six while matching the deployed model's held-out ranking accuracy.
+
+### Equal-cost comparison, controlled degradation and baseline checks
+
+```bash
+# Anytime comparison of the six variants on the instances of the main comparison:
+# hypervolume against exact evaluations and against wall-clock time, with the base
+# algorithms run to 300 generations. Then the equal-cost summary and the figure.
+python -u scripts/run_convergence.py \
+    --model checkpoints/surrogate_phase7_synthetic/best.pt \
+    --scales medium,large --n-seeds 10 --algos nsga2,moead,nsga3 \
+    --vanilla-gens 300 --seed-base 70042 --ref table5 --device cpu \
+    --output results/anytime_table5
+python scripts/analyze_anytime.py --input results/anytime_table5
+python scripts/generate_anytime_figure.py
+
+# Controlled degradation of the surrogate's ranking at fixed instance, scale,
+# algorithm and model: Gaussian noise on the predictions at six levels, with the
+# rank agreement of the degraded predictions measured inside each run.
+for scale in medium large; do for i in 0 1 2 3 4 5 6 7 8 9; do
+  python -u scripts/run_noise_control.py --scale $scale --seed-index $i \
+      --output results/noise_control
+done; done
+python scripts/run_noise_control.py --analyze --output results/noise_control
+
+# Whether the DeepSets baseline delivers the GNN's gain inside SA-NSGA-II.
+# Needs the outputs of the GNN-versus-MLP experiment and of the baseline training
+# (the MLP checkpoint, its results file and the DeepSets metrics).
+python scripts/train_deepsets_checkpoint.py
+python -u scripts/run_deepsets_downstream.py --output results/deepsets_downstream
+
+# Held-out accuracy of the flat baselines with their full input and with the
+# allocation matrix plus instance-level features only (three MLP seeds).
+python -u scripts/eval_flat_baselines.py --output results/flat_baselines
+
+# Whether replicating generators with noise, as the largest semi-real instances
+# do, changes the surrogate's local ranking.
+python -u scripts/run_replicate_effect.py --n-seeds 10 --output results/replicate_effect
+```
+
+The results in the paper were produced with PyTorch Geometric 2.7.0 and pymoo 0.6.1.6.
+In that pymoo version the niching step of NSGA-III draws random numbers that the run's
+seed does not fix, so NSGA-III runs are reproducible in distribution but not run for run.
 
 ## Case study: Taiwanese green-electricity retailers (2021 backtest)
 
@@ -184,6 +227,24 @@ done; done
 
 # 9. Analysis: speed-up to target, hypervolume at budget fractions, realized NT$ effect
 python scripts/analyze_e4_backtest.py --dir results/retailer/e4
+```
+
+The protocol of the backtest, as fixed before it was run, and the two amendments made
+before any reported backtest are recorded with their dates in
+`docs/case_study_protocol.md`.
+
+Buyer prices are the one assumed input of the case. To repeat part of the backtest
+with every buyer's price redrawn from the same range:
+
+```bash
+for p in redraw1 redraw2; do for arch in S M L; do
+  for m in 1 7 11; do for s in 1 2 3; do
+    OMP_NUM_THREADS=1 python scripts/run_e4_backtest.py --arch $arch --rho 0.1 \
+        --month $m --seed $s --method nsga2 --objs profit worst --price $p \
+        --costs results/retailer/unit_costs.json --out results/price_redraw/$p
+  done; done
+done; done
+python scripts/analyze_price_redraw.py
 ```
 
 `scripts/run_e2_conflict.py` is the earlier two-objective conflict test on single

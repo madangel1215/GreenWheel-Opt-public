@@ -64,6 +64,7 @@ def train_mlp_surrogate(
     device: str = "auto",
     checkpoint_dir: str = "checkpoints/surrogate_mlp",
     verbose: bool = True,
+    flatten_fn=None,
 ) -> tuple[WheelingMLP, NormStats, dict]:
     """Train the WheelingMLP surrogate model.
 
@@ -108,8 +109,11 @@ def train_mlp_surrogate(
         d.y = norm.normalize_targets(d.y.unsqueeze(0)).squeeze(0)
 
     # Convert to flat tensors
-    X_train, Y_train = _heterodata_to_flat(train_data, norm)
-    X_val, Y_val = _heterodata_to_flat(val_data, norm)
+    # flatten_fn lets a caller change which features the MLP sees;
+    # the default is the published input.
+    flatten = flatten_fn or _heterodata_to_flat
+    X_train, Y_train = flatten(train_data, norm)
+    X_val, Y_val = flatten(val_data, norm)
 
     input_dim = X_train.shape[1]
 

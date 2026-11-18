@@ -109,6 +109,7 @@ class SAMOEAStats:
     n_surr_evals: int
     hv: float = 0.0
     n_retained: int = 0  # screened-out offspring carried forward (retain mode only)
+    t_elapsed: float = 0.0  # wall-clock seconds since the run started
     # Measurement-only probe, populated on full-evaluation generations when
     # config.probe_enabled. Each is per objective [-profit, surplus, shortfall].
     n_probe: int = 0                      # candidates scored by the probe
@@ -645,6 +646,7 @@ def run_samoea(
             n_surr_evals=n_surr,
             hv=hv_val,
             n_retained=n_retained,
+            t_elapsed=time.time() - t0,
             n_probe=n_probe,
             probe_tau=probe_tau,
             probe_sp=probe_sp,

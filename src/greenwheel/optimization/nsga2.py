@@ -34,6 +34,13 @@ class HVCallback(Callback):
         super().__init__()
         self.interval = interval
         self.fronts: list[tuple[int, np.ndarray]] = []  # (gen, F)
+        # Cost axes for anytime comparisons: exact evaluations consumed and
+        # wall-clock seconds since the run started, per recorded front.
+        self.n_evals: list[int] = []
+        self.times: list[float] = []
+        # Set at construction, immediately before pymoo starts, so generation
+        # 1's time includes the initial population's evaluation, as SA-MOEA's does.
+        self._t0 = time.time()
 
     def notify(self, algorithm) -> None:
         gen = algorithm.n_gen
@@ -42,6 +49,8 @@ class HVCallback(Callback):
         F = algorithm.opt.get("F")
         if F is not None and len(F) > 0:
             self.fronts.append((gen, F.copy()))
+            self.n_evals.append(int(algorithm.evaluator.n_eval))
+            self.times.append(time.time() - self._t0)
 
     def compute_hv_history(self, ref_point: np.ndarray) -> list[dict]:
         """Compute HV for all stored fronts using a given ref_point."""
@@ -74,6 +83,8 @@ class OptimizationResult:
     elapsed_seconds: float
     hv_history: list[dict] = field(default_factory=list)
     fronts_history: list[tuple[int, np.ndarray]] = field(default_factory=list)
+    # Aligned with fronts_history: (exact evaluations so far, seconds so far).
+    cost_history: list[tuple[int, float]] = field(default_factory=list)
 
     def compute_hv_history(self, ref_point: np.ndarray) -> list[dict]:
         """Recompute HV history with a new ref_point from stored fronts."""
@@ -228,8 +239,10 @@ def run_nsga2(
     # Compute HV history post-hoc with correct ref_point
     hv_history: list[dict] = []
     fronts_history: list[tuple[int, np.ndarray]] = []
+    cost_history: list[tuple[int, float]] = []
     if callback is not None:
         fronts_history = callback.fronts
+        cost_history = list(zip(callback.n_evals, callback.times))
         if ref_point is None and len(pareto_solutions) > 0:
             # Auto-compute ref_point from final Pareto front
             front = np.array([[s.neg_profit, s.surplus, s.shortfall] for s in pareto_solutions])
@@ -244,4 +257,5 @@ def run_nsga2(
         elapsed_seconds=elapsed,
         hv_history=hv_history,
         fronts_history=fronts_history,
+        cost_history=cost_history,
     )

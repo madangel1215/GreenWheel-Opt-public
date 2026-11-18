@@ -263,6 +263,7 @@ def select_plants(
     window: tuple[pd.Timestamp, pd.Timestamp],
     seed: int = 42,
     exclude_offline: bool = False,
+    force_solar_replicates: int = 0,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Select plants via stratified sampling across capacity quantiles.
 
@@ -310,6 +311,16 @@ def select_plants(
         # Compute mean generation per plant (for stratified sampling)
         mean_gen = window_df.mean()
 
+        # Forced replicates isolate the effect of replication at a fixed instance
+        # size: the same number of solar nodes, some real and some noisy
+        # copies. With 0 (the default) nothing below changes and no extra random
+        # numbers are drawn, so every published instance is reproduced exactly.
+        n_forced = force_solar_replicates if tech == "solar" else 0
+        n_target = n_wanted
+        n_wanted = n_wanted - n_forced
+        if n_forced and n_wanted > len(good_plants):
+            raise ValueError(f"{n_wanted} real solar plants requested, {len(good_plants)} usable")
+
         if n_wanted <= len(good_plants):
             # Stratified sampling: divide plants into quantiles, sample from each
             n_quantiles = min(n_wanted, 4)
@@ -335,6 +346,16 @@ def select_plants(
             # Ensure exactly n_wanted
             selected = selected[:n_wanted]
             selected_df = window_df[selected]
+
+            # Same noise process as the unforced replication branch below.
+            for i in range(n_forced):
+                source_col = rng.choice(selected)
+                noise_scale = 0.05 + 0.05 * rng.random()  # 5-10% noise
+                noisy = window_df[source_col].copy()
+                noise = rng.normal(1.0, noise_scale, size=len(noisy))
+                selected_df = selected_df.copy() if i == 0 else selected_df
+                selected_df[f"{source_col}_rep{i}"] = (noisy * noise).clip(lower=0)
+            n_wanted = n_target
 
         else:
             # Need more plants than available: replicate with noise
@@ -459,6 +480,7 @@ def build_generation_profiles(
     month: int | None = None,
     seed: int = 42,
     exclude_offline: bool = False,
+    force_solar_replicates: int = 0,
 ) -> tuple[np.ndarray, np.ndarray, list[float], list[float], dict]:
     """Build generation profile arrays from real Taipower data.
 
@@ -488,7 +510,8 @@ def build_generation_profiles(
 
     # Step 2: Select plants
     solar_df, wind_df = select_plants(data, n_solar, n_wind, window, seed=seed,
-                                      exclude_offline=exclude_offline)
+                                      exclude_offline=exclude_offline,
+                                      force_solar_replicates=force_solar_replicates)
 
     metadata = {
         "window_start": str(start),

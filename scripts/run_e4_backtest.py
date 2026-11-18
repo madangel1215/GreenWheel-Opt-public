@@ -37,6 +37,7 @@ from torch_geometric.data import Batch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.run_e2_conflict import RowCap  # noqa: E402
+from src.greenwheel.data import replay2021 as rp  # noqa: E402
 from src.greenwheel.data import retailer2021 as rt  # noqa: E402
 from src.greenwheel.optimization.samoea import _select_for_true_eval  # noqa: E402
 from src.greenwheel.simulator.settlement import ScenarioBatchSettlement  # noqa: E402
@@ -72,6 +73,9 @@ def main():
     ap.add_argument("--ckpt", default=None)
     ap.add_argument("--out", default="results/retailer/e4")
     ap.add_argument("--budget-evals", type=int, default=BUDGET_EVALS, help="the backtest uses 10,000")
+    # Buyer prices are the one assumed input. A redraw replaces them for both the search
+    # and the settlement, as a retailer that knew different contract prices would.
+    ap.add_argument("--price", choices=("drawn", "redraw1", "redraw2"), default="drawn")
     a = ap.parse_args()
     t0 = time.time()
     unit = json.load(open(a.costs))[a.arch]
@@ -81,6 +85,9 @@ def main():
     cols = [INDEX[o] for o in a.objs]
 
     ret = rt.Retailer(a.arch, a.rho, a.seed)
+    if a.price != "drawn":
+        k = {"redraw1": 1, "redraw2": 2}[a.price]
+        ret.price = np.random.default_rng(70_000 + 1_000 * k + a.seed).uniform(*rp.GREEN_PRICE, ret.n)
     mp = rt.RetailerMonth(ret, a.month)
     rng = np.random.default_rng(a.seed)
 
@@ -172,6 +179,7 @@ def main():
         at[str(f)] = dict(gen=g, cost=c, minutes=c / 60, ex_ante=Ys[js].tolist(),
                           profit=float(r["profit"]), worst=float(r["worst"]))
     out = dict(arch=a.arch, rho=a.rho, month=a.month, seed=a.seed, method=a.method, objs=a.objs,
+               price=a.price, buyer_prices=ret.price.tolist(),
                unit=unit, budget=budget, generations=gen, n_exact=n_exact, n_screen=n_screen,
                history=history, final_front=Yf.tolist(), baseline_ex_ante=base_ind.tolist(), pick=j,
                realized=dict(pick=dict(profit=float(real_pick["profit"]), worst=float(real_pick["worst"])),

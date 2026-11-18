@@ -214,6 +214,8 @@ class WheelingConfig:
     # 2025-07 window contains three plants with zero output all month (卓蘭, 大潭,
     # 澎湖中屯); a retailer would never allocate a plant that is offline.
     exclude_offline_plants: bool = False
+    # Solar nodes built as noisy copies of real plants at a fixed instance size.
+    force_solar_replicates: int = 0
 
     # Optimization
     population_size: int = 100

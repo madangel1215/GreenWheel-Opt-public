@@ -98,9 +98,9 @@ def flatten_sample(d) -> np.ndarray:
     edges = d["gen", "supplies", "con"].edge_attr.reshape(-1).numpy()  # 3mn
     return np.concatenate([gen, con, g, edges]).astype(np.float32)
 
-def stack_flat(data_list: list) -> tuple[np.ndarray, np.ndarray]:
+def stack_flat(data_list: list, feature_fn=None) -> tuple[np.ndarray, np.ndarray]:
     """Return (X, Y) for a single-scale group. Y is raw targets (N, 3)."""
-    X = np.stack([flatten_sample(d) for d in data_list])
+    X = np.stack([(feature_fn or flatten_sample)(d) for d in data_list])
     Y = np.stack([d.y.numpy() for d in data_list]).astype(np.float32)
     return X, Y
 
@@ -115,6 +115,7 @@ def train_classical_per_scale(
     max_depth: int | None = None,
     n_jobs: int = -1,
     random_state: int = 0,
+    feature_fn=None,
 ) -> dict:
     """Train one model per scale, predict each scale's test subset, then pool.
 
@@ -136,8 +137,8 @@ def train_classical_per_scale(
         te = test_groups.get(scale, [])
         if not te:
             continue
-        Xtr, Ytr = stack_flat(tr)
-        Xte, Yte = stack_flat(te)
+        Xtr, Ytr = stack_flat(tr, feature_fn)
+        Xte, Yte = stack_flat(te, feature_fn)
 
         model = _make_classical(kind, n_estimators, max_depth, n_jobs, random_state)
         model.fit(Xtr, Ytr)
@@ -321,6 +322,7 @@ def train_deepsets(
     lr: float = 1e-3,
     device: str = "auto",
     verbose: bool = True,
+    return_model: bool = False,
 ) -> dict:
     """Train DeepSets jointly across scales; evaluate on test (raw scale)."""
     dev = _device(device)
@@ -393,7 +395,7 @@ def train_deepsets(
     metrics = compute_metrics(pred_raw, true_raw)
     metrics.pop("predictions", None)
 
-    return {
+    res = {
         "model_type": "deepsets",
         "aggregate": metrics,
         "best_val_loss": best_val,
@@ -401,6 +403,9 @@ def train_deepsets(
         "history": history,
         "n_params": sum(p.numel() for p in model.parameters()),
     }
+    if return_model:  # for deployment inside SA-MOEA; off by default
+        res["model"], res["norm"] = model.cpu(), norm
+    return res
 
 def _device(requested: str = "auto") -> torch.device:
     if requested == "auto":

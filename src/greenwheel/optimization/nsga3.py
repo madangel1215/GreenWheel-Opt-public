@@ -121,8 +121,10 @@ def run_nsga3(
     # HV history
     hv_history: list[dict] = []
     fronts_history: list[tuple[int, np.ndarray]] = []
+    cost_history: list[tuple[int, float]] = []
     if callback is not None:
         fronts_history = callback.fronts
+        cost_history = list(zip(callback.n_evals, callback.times))
         if ref_point is None and len(pareto_solutions) > 0:
             front = np.array([[s.neg_profit, s.surplus, s.shortfall] for s in pareto_solutions])
             ref_point = front.max(axis=0) * 1.1
@@ -136,4 +138,5 @@ def run_nsga3(
         elapsed_seconds=elapsed,
         hv_history=hv_history,
         fronts_history=fronts_history,
+        cost_history=cost_history,
     )

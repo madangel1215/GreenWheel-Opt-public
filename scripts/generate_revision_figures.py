@@ -12,7 +12,10 @@ plt.rcParams.update({"font.size": 13, "axes.labelsize": 14, "axes.titlesize": 14
 
 # ---- Convergence curves ----
 d = json.load(open("results/convergence/results.json"))
-fig, axes = plt.subplots(1, len(d), figsize=(5.5 * len(d), 4.2))
+# Drawn at the printed width (6.5 in) so the fonts below are the printed sizes.
+plt.rcParams.update({"font.size": 9, "axes.labelsize": 9.5, "axes.titlesize": 9.5,
+                     "legend.fontsize": 8.5, "xtick.labelsize": 8.5, "ytick.labelsize": 8.5})
+fig, axes = plt.subplots(1, len(d), figsize=(6.5, 2.7))
 if len(d) == 1:
     axes = [axes]
 for ax, scale in zip(axes, d):
@@ -22,13 +25,15 @@ for ax, scale in zip(axes, d):
         arr = np.array([c[:L] for c in curves])
         gens = np.arange(1, L + 1)
         mean, std = arr.mean(0), arr.std(0)
-        ax.plot(gens, mean, color=color, lw=2, label=meth)
+        ax.plot(gens, mean, color=color, lw=1.6, label=meth)
         ax.fill_between(gens, mean - std, mean + std, color=color, alpha=0.2)
     ax.set_xlabel("Generation"); ax.set_ylabel(r"Hypervolume ($\times 10^{16}$)")
     ax.set_title(f"({'ab'[list(d).index(scale)]}) {scale} scale")
-    ax.legend(loc="lower right"); ax.grid(alpha=0.3)
+    ax.legend(loc="upper left", frameon=False); ax.grid(alpha=0.3)
 fig.tight_layout(); fig.savefig("paper/figures/convergence.pdf", bbox_inches="tight")
 print("saved paper/figures/convergence.pdf")
+plt.rcParams.update({"font.size": 13, "axes.labelsize": 14, "axes.titlesize": 14,
+                     "legend.fontsize": 12, "xtick.labelsize": 12, "ytick.labelsize": 12})
 
 # ---- Alpha sensitivity ----
 d = json.load(open("results/alpha_sensitivity/results.json"))
